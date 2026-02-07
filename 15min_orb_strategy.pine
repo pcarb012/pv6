@@ -1,0 +1,102 @@
+// This Pine Script® source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=6
+strategy("15-Min Opening Range Breakout", overlay = true, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 100000, commission_type = strategy.commission.percent, commission_value = 0.01)
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ──────────────────────────────────────────────────────────────────────────────
+
+string sessionInput    = input.session("0930-0945", "Opening Range Window", tooltip = "The time window used to define the opening range. Default is the first 15 minutes of the US equity session (09:30 - 09:45 ET).")
+string closeTimeInput  = input.session("1555-1600", "Forced Close Window", tooltip = "Time window near end of day to flatten all positions. Default is 15:55 - 16:00 ET.")
+string tzInput         = input.string("America/New_York", "Timezone", options = ["America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Asia/Tokyo", "UTC"], tooltip = "Exchange timezone for session calculations.")
+float  stopMultInput   = input.float(1.0, "Stop-Loss Multiplier (x range)", minval = 0.1, step = 0.1, tooltip = "Stop-loss distance as a multiple of the opening range height.")
+float  tpMultInput     = input.float(2.0, "Take-Profit Multiplier (x range)", minval = 0.1, step = 0.1, tooltip = "Take-profit distance as a multiple of the opening range height.")
+bool   longEnabled     = input.bool(true, "Enable Long Entries")
+bool   shortEnabled    = input.bool(true, "Enable Short Entries")
+bool   showORBox       = input.bool(true, "Show Opening Range Box")
+color  orbColorInput   = input.color(color.new(color.blue, 85), "Opening Range Box Color")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Session Detection
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Detect whether the current bar falls within the opening range window.
+bool inORSession    = not na(time(timeframe.period, sessionInput, tzInput))
+bool inCloseSession = not na(time(timeframe.period, closeTimeInput, tzInput))
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Opening Range Calculation
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Use `var` to persist values across bars; reset each new OR session.
+var float orHigh      = na
+var float orLow       = na
+var bool  orDefined   = false
+var bool  tradedToday = false
+
+// Detect the first bar of a new OR session (session goes from inactive to active).
+bool orSessionStart = inORSession and not inORSession[1]
+
+// Reset on new OR session start.
+if orSessionStart
+    orHigh      := high
+    orLow       := low
+    orDefined   := false
+    tradedToday := false
+
+// Build the range while inside the OR window.
+if inORSession
+    orHigh := math.max(orHigh, high)
+    orLow  := math.min(orLow, low)
+
+// Mark the range as defined once the OR window closes.
+if not inORSession and inORSession[1]
+    orDefined := true
+
+// Calculate range height.
+float orRange = orDefined ? orHigh - orLow : na
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Entry Logic — Breakout of the Opening Range
+// ──────────────────────────────────────────────────────────────────────────────
+
+bool longCondition  = orDefined and not tradedToday and longEnabled  and close > orHigh and strategy.position_size == 0
+bool shortCondition = orDefined and not tradedToday and shortEnabled and close < orLow  and strategy.position_size == 0
+
+if longCondition
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP/SL", "Long", limit = orHigh + orRange * tpMultInput, stop = orHigh - orRange * stopMultInput)
+    tradedToday := true
+
+if shortCondition
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP/SL", "Short", limit = orLow - orRange * tpMultInput, stop = orLow + orRange * stopMultInput)
+    tradedToday := true
+
+// ──────────────────────────────────────────────────────────────────────────────
+// End-of-Day Forced Close
+// ──────────────────────────────────────────────────────────────────────────────
+
+if inCloseSession and strategy.position_size != 0
+    strategy.close_all("EOD Close")
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Visuals — Opening Range Box & Levels
+// ──────────────────────────────────────────────────────────────────────────────
+
+var box orBox = na
+
+// Draw or update the opening range box.
+if showORBox
+    if orSessionStart
+        orBox := box.new(bar_index, orHigh, bar_index, orLow, border_color = color.blue, bgcolor = orbColorInput, border_width = 1)
+    if inORSession and not na(orBox)
+        box.set_top(orBox, orHigh)
+        box.set_bottom(orBox, orLow)
+        box.set_right(orBox, bar_index)
+    if orDefined and not na(orBox)
+        box.set_right(orBox, bar_index)
+
+// Plot the OR high/low as horizontal levels for clarity.
+plot(orDefined ? orHigh : na, "OR High", color.green, 1, plot.style_linebr)
+plot(orDefined ? orLow  : na, "OR Low",  color.red,   1, plot.style_linebr)
