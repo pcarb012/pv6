@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pine Script v6 Reference</title>
+  <link rel="stylesheet" href="site/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌲</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <header id="top-bar">
+      <button id="sidebar-toggle" aria-label="Toggle sidebar">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect y="3" width="20" height="2" rx="1" fill="currentColor"/><rect y="9" width="20" height="2" rx="1" fill="currentColor"/><rect y="15" width="20" height="2" rx="1" fill="currentColor"/></svg>
+      </button>
+      <a href="#" class="logo" data-page="README.md">
+        <span class="logo-icon">🌲</span>
+        <span class="logo-text">Pine Script <strong>v6</strong></span>
+      </a>
+      <div id="search-wrapper">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><line x1="10.5" y1="10.5" x2="15" y2="15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <input type="text" id="search-input" placeholder="Search docs... (Ctrl+K)" autocomplete="off">
+        <kbd id="search-kbd">Ctrl+K</kbd>
+      </div>
+      <button id="theme-toggle" aria-label="Toggle theme">
+        <svg id="theme-icon-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="theme-icon-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+      </button>
+    </header>
+
+    <nav id="sidebar">
+      <div id="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <a class="nav-link active" data-page="README.md">Overview</a>
+          <a class="nav-link" data-page="LLM_MANIFEST.md">Manifest / Index</a>
+          <a class="nav-link" data-page="release_notes.md">Release Notes</a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Concepts</div>
+          <a class="nav-link" data-page="concepts/execution_model.md">Execution Model</a>
+          <a class="nav-link" data-page="concepts/timeframes.md">Timeframes</a>
+          <a class="nav-link" data-page="concepts/colors_and_display.md">Colors & Display</a>
+          <a class="nav-link" data-page="concepts/common_errors.md">Common Errors</a>
+          <a class="nav-link" data-page="concepts/methods.md">Methods</a>
+          <a class="nav-link" data-page="concepts/objects.md">Objects</a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Reference</div>
+          <a class="nav-link" data-page="reference/variables.md">Variables</a>
+          <a class="nav-link" data-page="reference/constants.md">Constants</a>
+          <a class="nav-link" data-page="reference/types.md">Types</a>
+          <a class="nav-link" data-page="reference/keywords.md">Keywords</a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Functions</div>
+          <a class="nav-link" data-page="reference/functions/ta.md">Technical Analysis</a>
+          <a class="nav-link" data-page="reference/functions/strategy.md">Strategy / Backtesting</a>
+          <a class="nav-link" data-page="reference/functions/request.md">External Data (request)</a>
+          <a class="nav-link" data-page="reference/functions/drawing.md">Drawing / Visuals</a>
+          <a class="nav-link" data-page="reference/functions/collections.md">Collections</a>
+          <a class="nav-link" data-page="reference/functions/general.md">General / Math</a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Visuals</div>
+          <a class="nav-link" data-page="visuals/overview.md">Overview</a>
+          <a class="nav-link" data-page="visuals/plots.md">Plots</a>
+          <a class="nav-link" data-page="visuals/bar_coloring.md">Bar Coloring</a>
+          <a class="nav-link" data-page="visuals/bar_plotting.md">Bar Plotting</a>
+          <a class="nav-link" data-page="visuals/backgrounds.md">Backgrounds</a>
+          <a class="nav-link" data-page="visuals/colors.md">Colors</a>
+          <a class="nav-link" data-page="visuals/levels.md">Levels</a>
+          <a class="nav-link" data-page="visuals/fills.md">Fills</a>
+          <a class="nav-link" data-page="visuals/lines_and_boxes.md">Lines & Boxes</a>
+          <a class="nav-link" data-page="visuals/tables.md">Tables</a>
+          <a class="nav-link" data-page="visuals/texts_and_shapes.md">Texts & Shapes</a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Writing Scripts</div>
+          <a class="nav-link" data-page="writing_scripts/debugging.md">Debugging</a>
+          <a class="nav-link" data-page="writing_scripts/limitations.md">Limitations</a>
+          <a class="nav-link" data-page="writing_scripts/profiling_and_optimization.md">Profiling & Optimization</a>
+          <a class="nav-link" data-page="writing_scripts/style_guide.md">Style Guide</a>
+          <a class="nav-link" data-page="writing_scripts/publishing_scripts.md">Publishing Scripts</a>
+        </div>
+      </div>
+    </nav>
+
+    <div id="sidebar-overlay"></div>
+
+    <main id="content">
+      <article id="markdown-body" class="markdown-body">
+        <div id="loading">Loading documentation...</div>
+      </article>
+      <footer id="page-footer">
+        <p>Community-maintained Pine Script v6 reference. Not affiliated with TradingView.</p>
+      </footer>
+    </main>
+  </div>
+
+  <div id="search-modal" class="modal-hidden">
+    <div id="search-modal-backdrop"></div>
+    <div id="search-modal-content">
+      <div id="search-modal-header">
+        <svg class="search-icon" width="18" height="18" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.5"/><line x1="10.5" y1="10.5" x2="15" y2="15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <input type="text" id="search-modal-input" placeholder="Search documentation..." autocomplete="off">
+        <kbd>Esc</kbd>
+      </div>
+      <div id="search-results"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="site/script.js"></script>
+</body>
+</html>
