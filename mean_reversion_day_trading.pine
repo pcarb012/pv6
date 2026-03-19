@@ -93,11 +93,8 @@ if exitAtMean
 
 // ─── End of Day Exit ─────────────────────────────────────────────────────────
 
-if closeEod and useSession
-    isEndOfSession = not na(time(timeframe.period, sessionTime)) and na(time(timeframe.period, sessionTime)[0] == false)
-    // Simpler: close if we were in session and now we're not
-    if inSession[1] and not inSession
-        strategy.close_all(comment = "EOD exit")
+if closeEod and useSession and inSession[1] and not inSession
+    strategy.close_all(comment = "EOD exit")
 
 // Also close if session is off and we still have a position
 if useSession and not inSession and strategy.position_size != 0
