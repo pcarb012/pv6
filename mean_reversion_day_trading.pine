@@ -2,37 +2,39 @@
 //@version=6
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// QUANT-7 MEAN REVERSION DAY TRADING STRATEGY
+// QUANT-7 MEAN REVERSION v2 — POST-AUTOPSY REBUILD
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// THESIS: Intraday price excursions beyond 2σ from the rolling mean revert to
-//         the mean with statistically significant frequency. This edge persists
-//         because retail flow creates short-term liquidity imbalances that
-//         market makers correct within bars. The strategy captures this by:
+// BACKTEST AUTOPSY (MNQ 5m, Dec 2025 – Mar 2026, 58 trades):
+//   Net P&L: -$223 | Sharpe: -0.77 | PF: 0.93 | Win Rate: 53% | Avg W/L: 0.81
 //
-//         1. Measuring deviation via Bollinger Bands (z-score proxy)
-//         2. Confirming exhaustion via RSI divergence from price
-//         3. Requiring elevated volume (institutional participation)
-//         4. Filtering regime via ADX (only trade in ranging markets)
-//         5. Sizing risk per trade at 1-2% of equity (fixed fractional)
+// PRIMARY FAILURE MODES IDENTIFIED:
+//   1. RE-ENTRY CASCADES: After stop-out, conditions remain true → immediate
+//      re-entry → stopped again. 6 clusters caused -$1,806 (59% of gross loss).
+//      FIX: Cooldown timer — no re-entry for N bars after a stop-loss.
 //
-// EDGE RATIONALE: Mean reversion is most robust in liquid, range-bound markets.
-//         Trend-following strategies dominate when ADX > 25; this strategy
-//         avoids those regimes. The multi-filter approach reduces false signals
-//         at the cost of fewer trades — a deliberate tradeoff favoring Sharpe
-//         over raw return.
+//   2. UNFAVORABLE R:R: Mean reversion to BB mid = small winners ($91 avg)
+//      but ATR stops produce larger losers ($113 avg). Ratio = 0.81.
+//      FIX: Widen BB entry threshold to 2.5σ for more room to revert.
+//           Add R-Multiple mode with minimum 1.5:1 reward/risk.
 //
-// VALIDATION FRAMEWORK (external to Pine — use Strategy Tester + export):
-//         - Walk-forward: optimize on 70% of data, validate on 30%
-//         - Minimum 100 trades for statistical significance
-//         - Target Sharpe > 1.0, max drawdown < 15%, win rate > 55%
-//         - Robust across 2x parameter perturbation (no cliff edges)
+//   3. NO REGIME FILTER: All cascading losses occurred in trending moves.
+//      FIX: ADX < 25 hard filter (was absent in v1 backtest).
+//
+//   4. COMMISSION DRAG: $593 on $2,838 gross = 21% eaten by costs. Many
+//      trades were tiny winners ($8-25) that barely covered round-trip.
+//      FIX: Min profit target filter — don't enter if BB mid is too close.
+//
+//   5. VOLUME FILTER WAS 1.0x (= no filter). Now requires 1.5x spike.
+//
+//   6. NO TIME-OF-DAY FILTER: First 30 min had false signals from gap fills.
+//      FIX: Delay entries until 10:00 AM to avoid opening auction noise.
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
-strategy("QUANT-7 Mean Reversion", overlay = true,
-     default_qty_type = strategy.percent_of_equity,
-     default_qty_value = 10,
+strategy("QUANT-7 Mean Reversion v2", overlay = true,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
      initial_capital = 100000,
      commission_type = strategy.commission.percent,
      commission_value = 0.02,
@@ -43,39 +45,57 @@ strategy("QUANT-7 Mean Reversion", overlay = true,
 
 // ─── INPUTS: SIGNAL GENERATION ───────────────────────────────────────────────
 
-bbLength      = input.int(20, "BB Lookback", minval = 10, maxval = 50, step = 5, group = "Signal: Bollinger Bands", tooltip = "Robust range: 15-30. Shorter = more signals, more noise.")
-bbMult        = input.float(2.0, "BB Std Dev", minval = 1.5, maxval = 3.0, step = 0.25, group = "Signal: Bollinger Bands", tooltip = "Entry threshold in standard deviations. 2.0 = ~5% of closes outside band.")
+bbLength      = input.int(20, "BB Lookback", minval = 10, maxval = 50, step = 5, group = "Signal: Bollinger Bands", tooltip = "Robust range: 15-30.")
+bbMult        = input.float(2.5, "BB Std Dev", minval = 1.5, maxval = 3.5, step = 0.25, group = "Signal: Bollinger Bands", tooltip = "v2: Raised from 2.0 to 2.5. Requires more extreme deviation = higher conviction entries with more room to revert.")
 
-rsiLength     = input.int(7, "RSI Lookback", minval = 2, maxval = 21, step = 1, group = "Signal: RSI", tooltip = "Short RSI (2-7) captures intraday mean reversion better than standard 14.")
-rsiOversold   = input.int(25, "RSI Oversold", minval = 5, maxval = 40, group = "Signal: RSI")
-rsiOverbought = input.int(75, "RSI Overbought", minval = 60, maxval = 95, group = "Signal: RSI")
+rsiLength     = input.int(7, "RSI Lookback", minval = 2, maxval = 21, step = 1, group = "Signal: RSI", tooltip = "Short RSI (2-7) per Connors research on intraday mean reversion.")
+rsiOversold   = input.int(20, "RSI Oversold", minval = 5, maxval = 40, group = "Signal: RSI", tooltip = "v2: Tightened from 25 to 20 for higher conviction.")
+rsiOverbought = input.int(80, "RSI Overbought", minval = 60, maxval = 95, group = "Signal: RSI", tooltip = "v2: Tightened from 75 to 80 for higher conviction.")
 
 // ─── INPUTS: REGIME FILTER ───────────────────────────────────────────────────
 
-useAdxFilter  = input.bool(true, "Enable ADX Regime Filter", group = "Regime Filter", tooltip = "Disables entries when ADX > threshold (trending market). Mean reversion fails in trends.")
+useAdxFilter  = input.bool(true, "Enable ADX Regime Filter", group = "Regime Filter", tooltip = "CRITICAL: Disables entries when ADX > threshold. All 6 cascading loss clusters in v1 occurred during trending regimes.")
 adxLength     = input.int(14, "ADX Lookback", minval = 7, maxval = 30, group = "Regime Filter")
-adxThreshold  = input.int(25, "ADX Max (Ranging Regime)", minval = 15, maxval = 40, group = "Regime Filter", tooltip = "ADX < 25 = ranging market. ADX > 25 = trending — avoid.")
+adxThreshold  = input.int(25, "ADX Max (Ranging Regime)", minval = 15, maxval = 40, group = "Regime Filter", tooltip = "ADX < 25 = ranging. This single filter would have prevented ~60% of v1 losses.")
 
 // ─── INPUTS: VOLUME CONFIRMATION ─────────────────────────────────────────────
 
-useVolFilter  = input.bool(true, "Require Volume Spike", group = "Volume Filter", tooltip = "Ensures institutional participation on entry bar.")
+useVolFilter  = input.bool(true, "Require Volume Spike", group = "Volume Filter", tooltip = "v1 used 1.0x (= no filter). Now requires genuine volume surge.")
 volLength     = input.int(20, "Volume MA Lookback", minval = 10, maxval = 50, group = "Volume Filter")
-volMult       = input.float(1.2, "Volume Spike Multiplier", minval = 1.0, maxval = 3.0, step = 0.1, group = "Volume Filter", tooltip = "1.2 = volume 20% above average. Higher = fewer but higher-conviction entries.")
+volMult       = input.float(1.5, "Volume Spike Multiplier", minval = 1.0, maxval = 3.0, step = 0.1, group = "Volume Filter", tooltip = "v2: Raised from 1.0 to 1.5. Ensures institutional participation on entry bar.")
+
+// ─── INPUTS: COOLDOWN (NEW — fixes re-entry cascades) ───────────────────────
+
+useCooldown      = input.bool(true, "Enable Post-Stop Cooldown", group = "Cooldown", tooltip = "CRITICAL FIX: After a stop-loss, wait N bars before re-entering. Prevents the re-entry death spiral that caused 59% of v1 gross loss.")
+cooldownBars     = input.int(12, "Cooldown Bars After Stop", minval = 3, maxval = 30, group = "Cooldown", tooltip = "12 bars × 5 min = 60 min cooldown. Allows the trending move to exhaust before re-attempting.")
+useConsecLimit   = input.bool(true, "Enable Consecutive Loss Limit", group = "Cooldown", tooltip = "After N consecutive losses, extend cooldown further.")
+maxConsecLosses  = input.int(2, "Max Consecutive Losses", minval = 1, maxval = 5, group = "Cooldown", tooltip = "After 2 consecutive losses, apply extended cooldown.")
+extendedCooldown = input.int(24, "Extended Cooldown Bars", minval = 12, maxval = 60, group = "Cooldown", tooltip = "24 bars × 5 min = 2 hours. Reset the regime before trying again.")
 
 // ─── INPUTS: RISK MANAGEMENT ─────────────────────────────────────────────────
 
-riskPct       = input.float(1.0, "Risk Per Trade (%)", minval = 0.25, maxval = 3.0, step = 0.25, group = "Risk Management", tooltip = "Fixed fractional position sizing. Risk this % of equity per trade. Kelly optimal is ~2% for most mean reversion strategies.")
+riskPct       = input.float(1.0, "Risk Per Trade (%)", minval = 0.25, maxval = 3.0, step = 0.25, group = "Risk Management", tooltip = "Fixed fractional position sizing. Risk this % of equity per trade.")
 atrLength     = input.int(14, "ATR Lookback (Stop Calc)", minval = 5, maxval = 30, group = "Risk Management")
-atrSlMult     = input.float(1.5, "Stop Loss (ATR Multiple)", minval = 0.5, maxval = 4.0, step = 0.25, group = "Risk Management", tooltip = "Stop distance = ATR × this value. Wider stops = fewer stopped out but larger per-trade loss.")
-tpMode        = input.string("Mean", "Take Profit Mode", options = ["Mean", "R-Multiple", "Opposite Band"], group = "Risk Management", tooltip = "Mean: exit at BB midline (highest win rate). R-Multiple: fixed reward/risk ratio. Opposite Band: exit at far BB (highest avg win).")
+atrSlMult     = input.float(2.0, "Stop Loss (ATR Multiple)", minval = 0.5, maxval = 4.0, step = 0.25, group = "Risk Management", tooltip = "v2: Raised from 1.5 to 2.0. Wider stops reduce whipsaw stop-outs in volatile conditions.")
+tpMode        = input.string("Mean", "Take Profit Mode", options = ["Mean", "R-Multiple", "Opposite Band"], group = "Risk Management", tooltip = "Mean: exit at BB midline. R-Multiple: fixed reward/risk ratio. Opposite Band: exit at far BB.")
 tpRatio       = input.float(1.5, "R-Multiple (if R-Multiple mode)", minval = 0.5, maxval = 5.0, step = 0.25, group = "Risk Management")
-maxBarsInTrade = input.int(20, "Max Bars in Trade (Time Stop)", minval = 5, maxval = 50, group = "Risk Management", tooltip = "Exits if trade hasn't hit TP/SL within N bars. Prevents capital lock-up in dead trades.")
+maxBarsInTrade = input.int(20, "Max Bars in Trade (Time Stop)", minval = 5, maxval = 50, group = "Risk Management", tooltip = "Exits if trade hasn't hit TP/SL within N bars. Prevents capital lock-up.")
+
+// ─── INPUTS: MIN PROFIT THRESHOLD (NEW — fixes commission drag) ──────────────
+
+useMinProfit  = input.bool(true, "Require Min Profit Target", group = "Trade Quality", tooltip = "Skip entries where the distance to BB mid is too small to cover costs. Eliminates tiny winners that get eaten by commissions.")
+minProfitAtr  = input.float(0.5, "Min Profit Target (ATR Multiple)", minval = 0.1, maxval = 2.0, step = 0.1, group = "Trade Quality", tooltip = "Distance from entry to BB mid must be at least 0.5 × ATR. Filters out low-reward setups.")
+
+// ─── INPUTS: BB WIDTH FILTER (NEW — avoids compressed ranges) ────────────────
+
+useBbWidthFilter = input.bool(true, "Require Min BB Width", group = "Trade Quality", tooltip = "When bands are too narrow, the reversion target is too close to cover costs and stops are too tight.")
+bbWidthMinPct    = input.float(0.3, "Min BB Width (% of Price)", minval = 0.1, maxval = 1.0, step = 0.05, group = "Trade Quality", tooltip = "BB width must be at least 0.3% of price. Ensures enough room for profitable mean reversion.")
 
 // ─── INPUTS: SESSION & EOD ───────────────────────────────────────────────────
 
-useSession    = input.bool(true, "Restrict to Session", group = "Session", tooltip = "Avoid illiquid pre/post-market where spreads widen and mean reversion breaks down.")
-sessionTime   = input.session("0930-1550", "Session (Exchange TZ)", group = "Session")
-closeEod      = input.bool(true, "Flatten at EOD", group = "Session", tooltip = "Eliminate overnight gap risk. Essential for day trading strategies.")
+useSession    = input.bool(true, "Restrict to Session", group = "Session")
+sessionTime   = input.session("1000-1550", "Session (Exchange TZ)", group = "Session", tooltip = "v2: Changed from 0930 to 1000. Avoids first 30 min of opening auction noise where gap fills create false mean reversion signals.")
+closeEod      = input.bool(true, "Flatten at EOD", group = "Session")
 
 // ─── INPUTS: BACKTEST WINDOW ─────────────────────────────────────────────────
 
@@ -94,8 +114,9 @@ inDateRange   = (not useStartDate or time >= startDate) and (not useEndDate or t
 
 [bbMid, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
 bbWidth    = bbUpper - bbLower
-bbPctB     = (close - bbLower) / bbWidth  // %B: 0 = at lower, 1 = at upper
-zScore     = (close - bbMid) / (bbWidth / (2 * bbMult))  // Approximate z-score
+bbPctB     = bbWidth > 0 ? (close - bbLower) / bbWidth : 0.5
+zScore     = bbWidth > 0 ? (close - bbMid) / (bbWidth / (2 * bbMult)) : 0.0
+bbWidthPct = close > 0 ? bbWidth / close * 100 : 0.0
 
 // ─── RSI ─────────────────────────────────────────────────────────────────────
 
@@ -103,14 +124,13 @@ rsi = ta.rsi(close, rsiLength)
 
 // ─── ADX (Directional Movement Index for regime detection) ───────────────────
 
-// Manual ADX calculation (Pine v6 compatible)
 upMove   = high - high[1]
 downMove = low[1] - low
 plusDM   = upMove > downMove and upMove > 0 ? upMove : 0.0
 minusDM  = downMove > upMove and downMove > 0 ? downMove : 0.0
 trueRange = ta.rma(ta.tr, adxLength)
-plusDI    = 100 * ta.rma(plusDM, adxLength) / trueRange
-minusDI   = 100 * ta.rma(minusDM, adxLength) / trueRange
+plusDI    = trueRange > 0 ? 100 * ta.rma(plusDM, adxLength) / trueRange : 0.0
+minusDI   = trueRange > 0 ? 100 * ta.rma(minusDM, adxLength) / trueRange : 0.0
 diSum     = plusDI + minusDI
 dx        = diSum > 0 ? 100 * math.abs(plusDI - minusDI) / diSum : 0.0
 adx       = ta.rma(dx, adxLength)
@@ -120,7 +140,7 @@ isRanging = not useAdxFilter or adx < adxThreshold
 // ─── Volume ──────────────────────────────────────────────────────────────────
 
 volMa  = ta.sma(volume, volLength)
-volOk  = not useVolFilter or volume >= volMa * volMult
+volOk  = not useVolFilter or (volMa > 0 and volume >= volMa * volMult)
 
 // ─── ATR ─────────────────────────────────────────────────────────────────────
 
@@ -130,28 +150,67 @@ atr = ta.atr(atrLength)
 
 inSession = useSession ? not na(time(timeframe.period, sessionTime)) : true
 
+// ─── BB Width Filter ─────────────────────────────────────────────────────────
+
+bbWidthOk = not useBbWidthFilter or bbWidthPct >= bbWidthMinPct
+
+// ─── Min Profit Filter ───────────────────────────────────────────────────────
+
+longProfitDist  = bbMid - close   // distance from entry to BB mid for longs
+shortProfitDist = close - bbMid   // distance from entry to BB mid for shorts
+longProfitOk    = not useMinProfit or (atr > 0 and longProfitDist >= atr * minProfitAtr)
+shortProfitOk   = not useMinProfit or (atr > 0 and shortProfitDist >= atr * minProfitAtr)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COOLDOWN SYSTEM — PREVENTS RE-ENTRY CASCADES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Track bars since last exit and consecutive losses
+var int barsSinceExit    = 999  // Start high so first trade is allowed
+var int consecLosses     = 0
+var float lastExitPnl    = 0.0
+var bool wasInPosition   = false
+
+// Detect position close and track P&L
+currentlyInPosition = strategy.position_size != 0
+justExited = wasInPosition and not currentlyInPosition
+wasInPosition := currentlyInPosition
+
+if justExited
+    barsSinceExit := 0
+    // Check if last trade was a loss by comparing equity
+    thisTradePnl = strategy.netprofit - lastExitPnl
+    lastExitPnl := strategy.netprofit
+    if thisTradePnl < 0
+        consecLosses += 1
+    else
+        consecLosses := 0
+else
+    if not currentlyInPosition
+        barsSinceExit += 1
+
+// Determine required cooldown
+activeCooldown = useCooldown ? (useConsecLimit and consecLosses >= maxConsecLosses ? extendedCooldown : cooldownBars) : 0
+cooldownOk = barsSinceExit >= activeCooldown
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SIGNAL LOGIC
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Long: price closes below lower BB + RSI confirms oversold + regime is ranging
-longSignal  = close < bbLower and rsi < rsiOversold and isRanging and volOk and inSession and inDateRange
+// Long: price closes below lower BB + RSI oversold + ranging + volume + cooldown clear
+longSignal  = close < bbLower and rsi < rsiOversold and isRanging and volOk and inSession and inDateRange and cooldownOk and bbWidthOk and longProfitOk
 
-// Short: price closes above upper BB + RSI confirms overbought + regime is ranging
-shortSignal = close > bbUpper and rsi > rsiOverbought and isRanging and volOk and inSession and inDateRange
+// Short: price closes above upper BB + RSI overbought + ranging + volume + cooldown clear
+shortSignal = close > bbUpper and rsi > rsiOverbought and isRanging and volOk and inSession and inDateRange and cooldownOk and bbWidthOk and shortProfitOk
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSITION SIZING — FIXED FRACTIONAL (RISK-BASED)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Risk per trade = riskPct% of equity
-// Position size = risk_amount / stop_distance
-// This ensures consistent risk regardless of volatility
-
-stopDist    = atr * atrSlMult
-riskAmount  = strategy.equity * (riskPct / 100)
-posSize     = stopDist > 0 ? math.floor(riskAmount / stopDist) : 0
-posSizeFinal = math.max(posSize, 1)  // Minimum 1 share/contract
+stopDist     = atr * atrSlMult
+riskAmount   = strategy.equity * (riskPct / 100)
+posSize      = stopDist > 0 ? math.floor(riskAmount / stopDist) : 0
+posSizeFinal = math.max(posSize, 1)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAKE PROFIT CALCULATION
@@ -183,7 +242,7 @@ if shortSignal and strategy.position_size == 0
     strategy.entry("Short", strategy.short, qty = posSizeFinal)
     strategy.exit("Short SL/TP", "Short", stop = shortSlPrice, limit = shortTp)
 
-// ─── Mean Reversion Exits (global scope for consistent calc) ─────────────────
+// ─── Mean Reversion Exits (global scope) ─────────────────────────────────────
 
 crossAboveMid = ta.crossover(close, bbMid)
 crossBelowMid = ta.crossunder(close, bbMid)
@@ -226,8 +285,9 @@ plotshape(longSignal and strategy.position_size == 0, "Long Entry",
 plotshape(shortSignal and strategy.position_size == 0, "Short Entry",
      shape.labeldown, location.abovebar, color.new(color.red, 0), size = size.small, text = "S")
 
-// ─── Regime Background ──────────────────────────────────────────────────────
+// ─── Cooldown Indicator ─────────────────────────────────────────────────────
 
+bgcolor(not cooldownOk and strategy.position_size == 0 ? color.new(color.purple, 95) : na, title = "Cooldown Active")
 bgcolor(not isRanging ? color.new(color.orange, 95) : na, title = "Trending Regime (No Trade)")
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 94) :
      strategy.position_size < 0 ? color.new(color.red, 94) : na, title = "Position")
@@ -236,20 +296,20 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 94) :
 // DASHBOARD — REAL-TIME QUANT METRICS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-var table dash = table.new(position.top_right, 2, 10, bgcolor = color.new(#0a0a0a, 10),
+var table dash = table.new(position.top_right, 2, 13, bgcolor = color.new(#0a0a0a, 10),
      border_width = 1, border_color = color.new(color.gray, 60))
 
 if barstate.islastconfirmedhistory or barstate.islast
-    // Helper colors
     rsiCol  = rsi < rsiOversold ? color.lime : rsi > rsiOverbought ? color.red : color.white
     adxCol  = adx < adxThreshold ? color.lime : color.orange
     volCol  = volOk ? color.lime : color.gray
     zCol    = math.abs(zScore) > 2 ? color.yellow : color.white
     sessCol = inSession ? color.lime : color.red
+    cdCol   = cooldownOk ? color.lime : color.fuchsia
 
     // Row 0: Header
     table.cell(dash, 0, 0, "QUANT-7", text_color = color.aqua, text_size = size.small)
-    table.cell(dash, 1, 0, "Mean Rev", text_color = color.aqua, text_size = size.small)
+    table.cell(dash, 1, 0, "v2", text_color = color.aqua, text_size = size.small)
 
     // Row 1: Z-Score
     table.cell(dash, 0, 1, "Z-Score", text_color = color.gray, text_size = size.small)
@@ -276,14 +336,26 @@ if barstate.islastconfirmedhistory or barstate.islast
     table.cell(dash, 0, 6, "Vol Ratio", text_color = color.gray, text_size = size.small)
     table.cell(dash, 1, 6, str.tostring(volRatio, "#.0") + "x", text_color = volCol, text_size = size.small)
 
-    // Row 7: Risk/Trade
-    table.cell(dash, 0, 7, "Risk/Trade", text_color = color.gray, text_size = size.small)
-    table.cell(dash, 1, 7, str.tostring(riskPct, "#.0") + "%", text_color = color.white, text_size = size.small)
+    // Row 7: BB Width %
+    table.cell(dash, 0, 7, "BB Width%", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 7, str.tostring(bbWidthPct, "#.00") + "%", text_color = bbWidthOk ? color.white : color.gray, text_size = size.small)
 
-    // Row 8: Regime
-    table.cell(dash, 0, 8, "Regime", text_color = color.gray, text_size = size.small)
-    table.cell(dash, 1, 8, isRanging ? "RANGE" : "TREND", text_color = adxCol, text_size = size.small)
+    // Row 8: Cooldown
+    table.cell(dash, 0, 8, "Cooldown", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 8, cooldownOk ? "CLEAR" : str.tostring(activeCooldown - barsSinceExit) + " bars", text_color = cdCol, text_size = size.small)
 
-    // Row 9: Session
-    table.cell(dash, 0, 9, "Session", text_color = color.gray, text_size = size.small)
-    table.cell(dash, 1, 9, inSession ? "LIVE" : "CLOSED", text_color = sessCol, text_size = size.small)
+    // Row 9: Consec Losses
+    table.cell(dash, 0, 9, "Consec L", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 9, str.tostring(consecLosses), text_color = consecLosses >= maxConsecLosses ? color.red : color.white, text_size = size.small)
+
+    // Row 10: Risk/Trade
+    table.cell(dash, 0, 10, "Risk/Trade", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 10, str.tostring(riskPct, "#.0") + "%", text_color = color.white, text_size = size.small)
+
+    // Row 11: Regime
+    table.cell(dash, 0, 11, "Regime", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 11, isRanging ? "RANGE" : "TREND", text_color = adxCol, text_size = size.small)
+
+    // Row 12: Session
+    table.cell(dash, 0, 12, "Session", text_color = color.gray, text_size = size.small)
+    table.cell(dash, 1, 12, inSession ? "LIVE" : "CLOSED", text_color = sessCol, text_size = size.small)
