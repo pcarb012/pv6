@@ -1,0 +1,139 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=6
+strategy("Mean Reversion Day Trading", overlay = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100,
+     initial_capital = 10000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.01,
+     slippage = 1,
+     process_orders_on_close = false,
+     calc_on_every_tick = false)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+
+// Bollinger Band settings
+bbLength    = input.int(20, "BB Length", minval = 5, maxval = 100, group = "Bollinger Bands")
+bbMult      = input.float(2.0, "BB Std Dev Multiplier", minval = 0.5, maxval = 4.0, step = 0.1, group = "Bollinger Bands")
+
+// RSI settings
+rsiLength   = input.int(14, "RSI Length", minval = 2, maxval = 50, group = "RSI Filter")
+rsiOversold = input.int(30, "RSI Oversold Level", minval = 5, maxval = 50, group = "RSI Filter")
+rsiOverbought = input.int(70, "RSI Overbought Level", minval = 50, maxval = 95, group = "RSI Filter")
+
+// Volume filter
+volLength   = input.int(20, "Volume MA Length", minval = 5, maxval = 100, group = "Volume Filter")
+volMult     = input.float(1.0, "Min Volume Multiplier", minval = 0.5, maxval = 3.0, step = 0.1, group = "Volume Filter")
+
+// Risk management
+useAtrSl    = input.bool(true, "Use ATR-Based Stop Loss", group = "Risk Management")
+atrLength   = input.int(14, "ATR Length", minval = 5, maxval = 50, group = "Risk Management")
+atrSlMult   = input.float(1.5, "ATR Stop Loss Multiplier", minval = 0.5, maxval = 5.0, step = 0.1, group = "Risk Management")
+fixedSlPct  = input.float(1.0, "Fixed Stop Loss %", minval = 0.1, maxval = 10.0, step = 0.1, group = "Risk Management")
+tpRatio     = input.float(2.0, "Take Profit / Stop Loss Ratio", minval = 0.5, maxval = 5.0, step = 0.1, group = "Risk Management")
+exitAtMean  = input.bool(true, "Close at Mean Reversion (BB Mid)", group = "Risk Management")
+
+// Session filter
+useSession  = input.bool(true, "Restrict to Trading Session", group = "Session")
+sessionTime = input.session("0930-1550", "Trading Session (Exchange TZ)", group = "Session")
+closeEod    = input.bool(true, "Close All at End of Day", group = "Session")
+
+// ─── Calculations ────────────────────────────────────────────────────────────
+
+// Bollinger Bands
+[bbMid, bbUpper, bbLower] = ta.bb(close, bbLength, bbMult)
+bbWidth = bbUpper - bbLower
+
+// RSI
+rsi = ta.rsi(close, rsiLength)
+
+// Volume condition
+volMa = ta.sma(volume, volLength)
+volOk = volume >= volMa * volMult
+
+// ATR for stops
+atr = ta.atr(atrLength)
+
+// Session filter
+inSession = useSession ? not na(time(timeframe.period, sessionTime)) : true
+
+// ─── Entry Conditions ────────────────────────────────────────────────────────
+
+// Long: price closes below lower BB, RSI is oversold, volume confirms
+longCondition = close < bbLower and rsi < rsiOversold and volOk and inSession
+
+// Short: price closes above upper BB, RSI is overbought, volume confirms
+shortCondition = close > bbUpper and rsi > rsiOverbought and volOk and inSession
+
+// ─── Stop Loss & Take Profit ─────────────────────────────────────────────────
+
+longSl  = useAtrSl ? close - atr * atrSlMult : close * (1 - fixedSlPct / 100)
+longTp  = exitAtMean ? bbMid : close + (close - longSl) * tpRatio
+shortSl = useAtrSl ? close + atr * atrSlMult : close * (1 + fixedSlPct / 100)
+shortTp = exitAtMean ? bbMid : close - (shortSl - close) * tpRatio
+
+// ─── Entries ─────────────────────────────────────────────────────────────────
+
+if longCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop = longSl, limit = longTp)
+
+if shortCondition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop = shortSl, limit = shortTp)
+
+// ─── Mean Reversion Exit ─────────────────────────────────────────────────────
+
+// If not using fixed TP, exit when price crosses back through the BB midline
+if exitAtMean
+    if strategy.position_size > 0 and ta.crossover(close, bbMid)
+        strategy.close("Long", comment = "Mean revert")
+    if strategy.position_size < 0 and ta.crossunder(close, bbMid)
+        strategy.close("Short", comment = "Mean revert")
+
+// ─── End of Day Exit ─────────────────────────────────────────────────────────
+
+if closeEod and useSession
+    isEndOfSession = not na(time(timeframe.period, sessionTime)) and na(time(timeframe.period, sessionTime)[0] == false)
+    // Simpler: close if we were in session and now we're not
+    if inSession[1] and not inSession
+        strategy.close_all(comment = "EOD exit")
+
+// Also close if session is off and we still have a position
+if useSession and not inSession and strategy.position_size != 0
+    strategy.close_all(comment = "Out of session")
+
+// ─── Plots ───────────────────────────────────────────────────────────────────
+
+// Bollinger Bands
+pMid   = plot(bbMid, "BB Mid", color.new(color.yellow, 0), linewidth = 1)
+pUpper = plot(bbUpper, "BB Upper", color.new(color.blue, 0), linewidth = 1)
+pLower = plot(bbLower, "BB Lower", color.new(color.blue, 0), linewidth = 1)
+fill(pUpper, pLower, color = color.new(color.blue, 92), title = "BB Fill")
+
+// Entry signals
+plotshape(longCondition and strategy.position_size == 0, "Long Signal",
+     shape.triangleup, location.belowbar, color.new(color.green, 0), size = size.small)
+plotshape(shortCondition and strategy.position_size == 0, "Short Signal",
+     shape.triangledown, location.abovebar, color.new(color.red, 0), size = size.small)
+
+// Background tint when in a trade
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 93) :
+     strategy.position_size < 0 ? color.new(color.red, 93) : na, title = "Position BG")
+
+// ─── Info Table ──────────────────────────────────────────────────────────────
+
+var table infoTbl = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 70),
+     border_width = 1, border_color = color.gray)
+
+if barstate.islast
+    table.cell(infoTbl, 0, 0, "RSI", text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 1, 0, str.tostring(rsi, "#.0"), text_color = rsi < rsiOversold ? color.green : rsi > rsiOverbought ? color.red : color.white, text_size = size.small)
+    table.cell(infoTbl, 0, 1, "ATR", text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 1, 1, str.tostring(atr, "#.00"), text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 0, 2, "BB Width", text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 1, 2, str.tostring(bbWidth, "#.00"), text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 0, 3, "Vol Ratio", text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 1, 3, str.tostring(volume / volMa, "#.0x"), text_color = volOk ? color.green : color.gray, text_size = size.small)
+    table.cell(infoTbl, 0, 4, "Session", text_color = color.white, text_size = size.small)
+    table.cell(infoTbl, 1, 4, inSession ? "ACTIVE" : "CLOSED", text_color = inSession ? color.green : color.red, text_size = size.small)
