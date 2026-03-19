@@ -84,11 +84,15 @@ if shortCondition and strategy.position_size == 0
 
 // ─── Mean Reversion Exit ─────────────────────────────────────────────────────
 
+// Compute crossovers at global scope so they execute on every bar
+crossAboveMid = ta.crossover(close, bbMid)
+crossBelowMid = ta.crossunder(close, bbMid)
+
 // If not using fixed TP, exit when price crosses back through the BB midline
 if exitAtMean
-    if strategy.position_size > 0 and ta.crossover(close, bbMid)
+    if strategy.position_size > 0 and crossAboveMid
         strategy.close("Long", comment = "Mean revert")
-    if strategy.position_size < 0 and ta.crossunder(close, bbMid)
+    if strategy.position_size < 0 and crossBelowMid
         strategy.close("Short", comment = "Mean revert")
 
 // ─── End of Day Exit ─────────────────────────────────────────────────────────
@@ -123,7 +127,7 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 93) :
 var table infoTbl = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 70),
      border_width = 1, border_color = color.gray)
 
-if barstate.islast
+if barstate.islastconfirmedhistory or barstate.islast
     table.cell(infoTbl, 0, 0, "RSI", text_color = color.white, text_size = size.small)
     table.cell(infoTbl, 1, 0, str.tostring(rsi, "#.0"), text_color = rsi < rsiOversold ? color.green : rsi > rsiOverbought ? color.red : color.white, text_size = size.small)
     table.cell(infoTbl, 0, 1, "ATR", text_color = color.white, text_size = size.small)
